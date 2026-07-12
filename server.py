@@ -37,6 +37,8 @@ SUMMARY_FIELDS = ("Timestamp", "RuleTitle", "Level", "Computer", "EventID", "Rec
 OUTPUT_FORMATS = ["summary", "full"]
 
 RULES_DIR = HAYABUSA_DIR / "rules"
+SIGMA_RULES_DIR = Path(__file__).resolve().parent / "rules"
+ATTACK_DATA_PATH = Path(__file__).resolve().parent / "attack" / "enterprise-attack.json"
 
 _TITLE_RE = re.compile(r"^title:\s*(.+)$")
 _ID_RE = re.compile(r"^id:\s*(\S+)")
@@ -45,6 +47,8 @@ _STATUS_RE = re.compile(r"^status:\s*(\S+)")
 _DESCRIPTION_RE = re.compile(r"^description:\s*(.*)$")
 _TAGS_RE = re.compile(r"^tags:\s*$")
 _TAG_ITEM_RE = re.compile(r"^\s*-\s*(.+)$")
+_TECHNIQUE_TAG_RE = re.compile(r"^attack\.(t\d{4}(?:\.\d{3})?)$", re.IGNORECASE)
+_TECHNIQUE_ID_RE = re.compile(r"^t?\d{4}(?:\.\d{3})?$", re.IGNORECASE)
 
 
 def _strip_quotes(value: str) -> str:
@@ -298,6 +302,330 @@ def get_hayabusa_rules(keyword: str | None = None, max_results: int | None = 50)
         "returned": len(matches),
         "truncated": truncated,
         "rules": matches,
+    }
+
+
+def _list_sigma_rule_files() -> list[Path]:
+    """List curated Sigma rule files in ./rules/ (flat, non-recursive)."""
+    if not SIGMA_RULES_DIR.is_dir():
+        return []
+    return sorted(SIGMA_RULES_DIR.glob("*.yml"))
+
+
+def _find_sigma_rule_file(rule_name: str) -> Path | None:
+    """Resolve a rule_name (with or without a .yml/.yaml suffix) to a file in ./rules/."""
+    stem = rule_name
+    for suffix in (".yml", ".yaml"):
+        if stem.lower().endswith(suffix):
+            stem = stem[: -len(suffix)]
+            break
+    needle = stem.lower()
+    for path in _list_sigma_rule_files():
+        if path.stem.lower() == needle:
+            return path
+    return None
+
+
+def _technique_ids_from_tags(tags: list[str]) -> list[str]:
+    """Extract ATT&CK technique IDs (e.g. 'T1003.001') from a rule's Sigma tags."""
+    techniques = []
+    for tag in tags:
+        if match := _TECHNIQUE_TAG_RE.match(tag):
+            techniques.append(match.group(1).upper())
+    return techniques
+
+
+def _sigma_rule_summary(rule_path: Path) -> dict | None:
+    """Summarize a curated Sigma rule for the detection:// resources."""
+    summary = _parse_rule_summary(rule_path)
+    if summary is None:
+        return None
+    return {
+        "rule_name": rule_path.stem,
+        "title": summary["title"],
+        "id": summary["id"],
+        "level": summary["level"],
+        "status": summary["status"],
+        "tags": summary["tags"],
+        "techniques": _technique_ids_from_tags(summary["tags"]),
+        "description": summary["description"],
+    }
+
+
+@mcp.resource("detection://rules", mime_type="application/json")
+def list_detection_rules() -> dict:
+    """List all curated Sigma detection rules in ./rules/."""
+    rules = [
+        summary
+        for path in _list_sigma_rule_files()
+        if (summary := _sigma_rule_summary(path)) is not None
+    ]
+    return {"count": len(rules), "rules": rules}
+
+
+@mcp.resource("detection://rules/{rule_name}", mime_type="application/x-yaml")
+def get_detection_rule(rule_name: str) -> str:
+    """Get a specific Sigma rule's raw YAML content by its file name (with or without extension)."""
+    rule_path = _find_sigma_rule_file(rule_name)
+    if rule_path is None:
+        raise ValueError(f"Rule not found: {rule_name}")
+    return rule_path.read_text(encoding="utf-8")
+
+
+def _normalize_technique_id(technique_id: str) -> str:
+    """Normalize a technique ID to canonical 'T####' / 'T####.###' form."""
+    needle = technique_id.strip().upper()
+    if not needle.startswith("T"):
+        needle = f"T{needle}"
+    return needle
+
+
+def _normalize_tactic_name(tactic_name: str) -> str:
+    """Normalize a tactic name to its ATT&CK shortname (e.g. 'Credential Access' -> 'credential-access')."""
+    return re.sub(r"\s+", "-", tactic_name.strip().lower())
+
+
+@mcp.resource("detection://rules/by-technique/{technique_id}", mime_type="application/json")
+def list_rules_by_technique(technique_id: str) -> dict:
+    """List curated Sigma rules tagged with a given ATT&CK technique ID (e.g. 'T1003.001')."""
+    needle = _normalize_technique_id(technique_id)
+
+    rules = [
+        summary
+        for path in _list_sigma_rule_files()
+        if (summary := _sigma_rule_summary(path)) is not None and needle in summary["techniques"]
+    ]
+
+    return {"technique_id": needle, "count": len(rules), "rules": rules}
+
+
+_attack_techniques_cache: dict[str, dict] | None = None
+
+
+def _load_attack_techniques() -> dict[str, dict]:
+    """Load and cache ATT&CK technique name/description/url, keyed by technique ID.
+
+    Parses the MITRE ATT&CK Enterprise STIX bundle once per server process —
+    it's tens of MB, too expensive to re-parse on every resource read, and
+    static for the process lifetime (re-run scripts/download_attack_data.py
+    and restart the server to pick up a newer ATT&CK release).
+    """
+    global _attack_techniques_cache
+    if _attack_techniques_cache is not None:
+        return _attack_techniques_cache
+
+    if not ATTACK_DATA_PATH.is_file():
+        raise FileNotFoundError(
+            f"ATT&CK data not found at {ATTACK_DATA_PATH}. "
+            "Run scripts/download_attack_data.py first."
+        )
+
+    with open(ATTACK_DATA_PATH, encoding="utf-8") as f:
+        bundle = json.load(f)
+
+    techniques: dict[str, dict] = {}
+    for obj in bundle.get("objects", []):
+        if obj.get("type") != "attack-pattern":
+            continue
+        if obj.get("revoked") or obj.get("x_mitre_deprecated"):
+            continue
+
+        external_id = None
+        url = None
+        for ref in obj.get("external_references", []):
+            if ref.get("source_name") == "mitre-attack":
+                external_id = ref.get("external_id")
+                url = ref.get("url")
+                break
+        if not external_id:
+            continue
+
+        tactics = [
+            phase["phase_name"]
+            for phase in obj.get("kill_chain_phases", [])
+            if phase.get("kill_chain_name") == "mitre-attack"
+        ]
+
+        techniques[external_id.upper()] = {
+            "name": obj.get("name", ""),
+            "description": obj.get("description", ""),
+            "is_subtechnique": bool(obj.get("x_mitre_is_subtechnique", False)),
+            "url": url,
+            "tactics": tactics,
+        }
+
+    _attack_techniques_cache = techniques
+    return techniques
+
+
+_attack_tactics_cache: dict[str, str] | None = None
+
+
+def _load_attack_tactics() -> dict[str, str]:
+    """Load and cache ATT&CK tactic shortname -> display name (e.g. 'credential-access' -> 'Credential Access').
+
+    Parsed once per server process from the same STIX bundle as
+    _load_attack_techniques, for the same reasons (large file, static
+    for the process lifetime).
+    """
+    global _attack_tactics_cache
+    if _attack_tactics_cache is not None:
+        return _attack_tactics_cache
+
+    if not ATTACK_DATA_PATH.is_file():
+        raise FileNotFoundError(
+            f"ATT&CK data not found at {ATTACK_DATA_PATH}. "
+            "Run scripts/download_attack_data.py first."
+        )
+
+    with open(ATTACK_DATA_PATH, encoding="utf-8") as f:
+        bundle = json.load(f)
+
+    tactics: dict[str, str] = {}
+    for obj in bundle.get("objects", []):
+        if obj.get("type") != "x-mitre-tactic":
+            continue
+        shortname = obj.get("x_mitre_shortname")
+        if shortname:
+            tactics[shortname] = obj.get("name", shortname)
+
+    _attack_tactics_cache = tactics
+    return tactics
+
+
+def _assess_technique_coverage(
+    technique_id: str, matching_rules: list[dict], all_rules: list[dict]
+) -> str:
+    """Rate detection coverage for a technique against the curated rule set.
+
+    "covered": at least one rule is tagged with this exact technique ID.
+    "partial": no exact-match rule, but a parent technique (for a
+        sub-technique ID) or a sub-technique (for a parent ID) is covered —
+        related detection logic likely catches some, not all, of this
+        technique's variants.
+    "gap": nothing in the curated rule set references this technique at all.
+    """
+    if matching_rules:
+        return "covered"
+
+    all_covered = {t for rule in all_rules for t in rule["techniques"]}
+    parent = technique_id.split(".")[0] if "." in technique_id else None
+    has_parent_coverage = parent is not None and parent in all_covered
+    has_child_coverage = any(t.startswith(f"{technique_id}.") for t in all_covered)
+
+    return "partial" if (has_parent_coverage or has_child_coverage) else "gap"
+
+
+@mcp.resource("detection://attack/techniques/{technique_id}", mime_type="application/json")
+def get_attack_technique(technique_id: str) -> dict:
+    """Look up an ATT&CK technique and assess our curated rule set's coverage of it.
+
+    Combines MITRE's ATT&CK STIX data (name/description) with the ATT&CK tags
+    parsed from ./rules/ to answer "what is this technique, do we detect it,
+    and how well?" in one lookup.
+    """
+    needle = _normalize_technique_id(technique_id)
+
+    techniques = _load_attack_techniques()
+    technique = techniques.get(needle)
+    if technique is None:
+        raise ValueError(f"Unknown ATT&CK technique: {technique_id}")
+
+    all_rules = [
+        summary for path in _list_sigma_rule_files() if (summary := _sigma_rule_summary(path))
+    ]
+    matching_rules = [rule for rule in all_rules if needle in rule["techniques"]]
+
+    return {
+        "technique_id": needle,
+        "name": technique["name"],
+        "description": technique["description"],
+        "is_subtechnique": technique["is_subtechnique"],
+        "url": technique["url"],
+        "rules": matching_rules,
+        "rule_count": len(matching_rules),
+        "coverage": _assess_technique_coverage(needle, matching_rules, all_rules),
+    }
+
+
+@mcp.tool()
+def analyze_coverage(target: str) -> dict:
+    """Analyze curated detection coverage for an ATT&CK technique or tactic.
+
+    Combines the ATT&CK STIX data with the ./rules/ Sigma rule set (the same
+    sources behind the detection:// resources) into a single coverage report,
+    either for one technique or for every technique in a tactic.
+
+    Args:
+        target: An ATT&CK technique ID (e.g. "T1003.001" or "T1003"), or a
+            tactic name/shortname (e.g. "Credential Access" or
+            "credential-access").
+    """
+    stripped = target.strip() if target else ""
+    if not stripped:
+        return {"error": "target must be a non-empty technique ID or tactic name."}
+
+    try:
+        techniques = _load_attack_techniques()
+    except FileNotFoundError as exc:
+        return {"error": str(exc)}
+
+    all_rules = [
+        summary for path in _list_sigma_rule_files() if (summary := _sigma_rule_summary(path))
+    ]
+
+    if _TECHNIQUE_ID_RE.match(stripped):
+        needle = _normalize_technique_id(stripped)
+        technique = techniques.get(needle)
+        if technique is None:
+            return {"error": f"Unknown ATT&CK technique: {target}"}
+
+        matching_rules = [rule for rule in all_rules if needle in rule["techniques"]]
+        return {
+            "target_type": "technique",
+            "technique_id": needle,
+            "name": technique["name"],
+            "tactics": technique["tactics"],
+            "coverage": _assess_technique_coverage(needle, matching_rules, all_rules),
+            "rule_count": len(matching_rules),
+            "rules": matching_rules,
+        }
+
+    try:
+        tactics = _load_attack_tactics()
+    except FileNotFoundError as exc:
+        return {"error": str(exc)}
+
+    tactic_shortname = _normalize_tactic_name(stripped)
+    if tactic_shortname not in tactics:
+        return {
+            "error": (
+                f"Unknown tactic '{target}'. Known tactics: "
+                f"{', '.join(sorted(tactics.values()))}"
+            )
+        }
+
+    tactic_techniques = {
+        tid: t for tid, t in techniques.items() if tactic_shortname in t["tactics"]
+    }
+
+    covered, partial, gaps = [], [], []
+    for tid, t in sorted(tactic_techniques.items()):
+        matching_rules = [rule for rule in all_rules if tid in rule["techniques"]]
+        entry = {"technique_id": tid, "name": t["name"], "rule_count": len(matching_rules)}
+        status = _assess_technique_coverage(tid, matching_rules, all_rules)
+        {"covered": covered, "partial": partial, "gap": gaps}[status].append(entry)
+
+    return {
+        "target_type": "tactic",
+        "tactic": tactics[tactic_shortname],
+        "technique_count": len(tactic_techniques),
+        "covered_count": len(covered),
+        "partial_count": len(partial),
+        "gap_count": len(gaps),
+        "covered": covered,
+        "partial": partial,
+        "gaps": gaps,
     }
 
 

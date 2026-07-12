@@ -1,0 +1,41 @@
+title: Suspicious Process Access to LSASS Memory
+id: fe41d923-d63b-45bb-8c85-bbfb6886b6b3
+status: test
+description: |
+    Detects non-standard processes requesting access to lsass.exe with access
+    rights commonly used by credential dumping tools (e.g. Mimikatz, ProcDump,
+    Task Manager abuse) to read process memory and extract credential material.
+references:
+    - https://attack.mitre.org/techniques/T1003/001/
+    - https://github.com/SigmaHQ/sigma/blob/master/rules/windows/process_access/proc_access_win_lsass_access.yml
+author: Detection Engineering KB
+date: 2026-07-12
+tags:
+    - attack.credential-access
+    - attack.t1003.001
+    - attack.s0002
+logsource:
+    category: process_access
+    product: windows
+detection:
+    selection_target:
+        TargetImage|endswith: '\lsass.exe'
+    selection_access:
+        GrantedAccess:
+            - '0x1010'
+            - '0x1410'
+            - '0x1438'
+            - '0x143a'
+            - '0x1fffff'
+    filter_main_known_tools:
+        SourceImage|endswith:
+            - '\MsMpEng.exe'
+            - '\WmiPrvSE.exe'
+            - '\wmiprvse.exe'
+            - '\werfault.exe'
+            - '\dllhost.exe'
+    condition: selection_target and selection_access and not filter_main_known_tools
+falsepositives:
+    - Endpoint protection or EDR agents performing legitimate memory scans
+    - Backup or monitoring agents with broad process-access privileges
+level: high

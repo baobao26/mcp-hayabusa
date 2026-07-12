@@ -1,6 +1,7 @@
 hayabusa/
 *.zip
 samples/*.evtx
+attack/
 
 __pycache__/
 *.pyc

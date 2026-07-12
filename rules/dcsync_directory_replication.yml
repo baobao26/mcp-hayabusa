@@ -1,0 +1,35 @@
+title: Active Directory Replication from Non-Domain-Controller Account (DCSync)
+id: 469e1960-ca92-4c08-93bc-dce9e5b19c14
+status: test
+description: |
+    Detects an Active Directory Replication Service request (Event ID 4662)
+    invoking the DS-Replication-Get-Changes / DS-Replication-Get-Changes-All /
+    DS-Replication-Get-Changes-In-Filtered-Set extended rights by a security
+    principal other than a Domain Controller machine account, indicative of
+    the DCSync attack used to dump credential hashes from AD.
+references:
+    - https://attack.mitre.org/techniques/T1003/006/
+    - https://github.com/SigmaHQ/sigma/blob/master/rules/windows/builtin/security/win_security_dcsync.yml
+author: Detection Engineering KB
+date: 2026-07-12
+tags:
+    - attack.credential-access
+    - attack.t1003.006
+    - attack.s0002
+logsource:
+    product: windows
+    service: security
+detection:
+    selection:
+        EventID: 4662
+        Properties|contains:
+            - '1131f6aa-9c07-11d1-f79f-00c04fc2dcd2'
+            - '1131f6ad-9c07-11d1-f79f-00c04fc2dcd2'
+            - '89e95b76-444d-4c62-991a-0facbeda640c'
+    filter_domain_controllers:
+        SubjectUserName|endswith: '$'
+    condition: selection and not filter_domain_controllers
+falsepositives:
+    - Legitimate Azure AD Connect or third-party directory-sync service accounts
+    - Backup solutions that replicate AD for disaster-recovery purposes
+level: critical

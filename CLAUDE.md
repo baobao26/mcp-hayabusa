@@ -4,26 +4,44 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project status
 
-Implemented. `server.py` is a single-file MCP server (`FastMCP`) exposing two tools: `scan_evtx`, which shells out to the Hayabusa CLI, and `get_hayabusa_rules`, which lists/filters the local Sigma/Hayabusa rule set. See `HANDOFF.md` for full design rationale and open items.
+Two layers, at different stages:
+
+- **Hayabusa scanning (implemented).** `server.py` is a single-file MCP server (`FastMCP`) exposing two tools: `scan_evtx`, which shells out to the Hayabusa CLI, and `get_hayabusa_rules`, which lists/filters the local Sigma/Hayabusa rule set. See `HANDOFF.md` for full design rationale and open items.
+- **Detection engineering knowledge base (in progress).** The same server is being extended beyond scanning into a broader detection-engineering knowledge base. Done so far: a curated `./rules/` directory of Sigma rules; three `detection://rules...` MCP resources exposing them; a downloaded, gitignored copy of the MITRE ATT&CK Enterprise STIX bundle (`./attack/enterprise-attack.json`, via `scripts/download_attack_data.py`); and a `detection://attack/techniques/{technique_id}` resource that answers "what is this technique, do we detect it, and how well?" in one lookup (see Architecture below). Not yet done: `mappings/` (explicit, hand-curated ATT&CK technique-to-rule mapping files, as opposed to the tag-derived lookup the resources already do on the fly).
+
+## Project goal
+
+An MCP server that wraps the Hayabusa CLI for EVTX (Windows Event Log) analysis, and doubles as a detection engineering knowledge base.
+
+Original scope:
+- Expose a `scan_evtx` tool that runs Hayabusa against EVTX files.
+- Return results as structured JSON.
+- Support filtering by severity level, rule title, and result count; support a trimmed vs. full output shape.
+- Expose a `get_hayabusa_rules` tool so a caller can discover what detection rules exist before scanning.
+- Handle errors gracefully.
+
+Expanded scope (detection engineering knowledge base):
+- Expose Sigma rules as browsable MCP resources.
+- Expose ATT&CK technique-to-rule mappings.
+- Allow Claude to query detection coverage (e.g. "which techniques have no matching rule?").
+- Combine with the existing Hayabusa scanning (`scan_evtx`) so coverage/mapping queries and live EVTX findings can be cross-referenced.
+
+## Detection engineering knowledge base: structure and status
+
+- **`rules/` (done)** — curated Sigma detection rules (YAML), checked into git. Distinct from `./hayabusa/rules/`, which is the gitignored, downloaded-on-demand Hayabusa/Sigma rule checkout used by `scan_evtx`/`get_hayabusa_rules` (see Architecture below) — don't confuse the two. Currently 24 rules: 6 hand-authored (T1003.001 LSASS access, T1558.003 Kerberoasting, T1003.006 DCSync, T1550.002 Pass-the-Hash) plus 18 unmodified rules copied from the real [SigmaHQ/sigma](https://github.com/SigmaHQ/sigma) repo (original `author`/`references` preserved in each file, prefixed `sigmahq_`), broadened across credential-access (T1552.002, T1555.004, T1110, T1187, T1556, plus more of the original 4), lateral-movement (T1021.001/.002/.006, T1570, T1569.002), and persistence (T1053.005, T1547.001, T1136.001, T1098, T1543.003) — a deliberately curated cross-section of well-known techniques per tactic, **not** a full mirror of upstream Sigma (~4,700 files across all platforms), which was considered and rejected: it would duplicate `./hayabusa/rules/`, blow up repo size, and (with this project's flat, non-`hayabusa`/`sigma`-subdirectory `rules/` layout) risk filename collisions in `_find_sigma_rule_file()`'s stem-only lookup.
+- **`mappings/` (planned, not yet created)** — explicit, hand-curated ATT&CK technique-to-rule mapping files. Would be additive to what `detection://rules/by-technique/{technique_id}` and `detection://attack/techniques/{technique_id}` already derive on the fly from each rule's `tags:` (see Architecture) — e.g. for many-to-many mappings, or annotating a technique with notes/caveats that don't belong in a rule file itself.
+- **`attack/enterprise-attack.json` (done, gitignored)** — the MITRE ATT&CK Enterprise STIX bundle, fetched by `scripts/download_attack_data.py` from the [attack-stix-data](https://github.com/mitre-attack/attack-stix-data) repo. Not checked in (~50MB) — same fetched-on-demand pattern as `./hayabusa/` and `./samples/`.
+- **`server.py` (done)** — four `detection://` MCP resources are implemented: rule listing, single-rule content, by-technique lookup, and ATT&CK technique lookup with coverage assessment (see Architecture).
 
 ## Commands
 
 - **Install dependencies**: `pip install -r requirements.txt` (just `mcp`; everything else is standard library).
 - **Install Hayabusa**: `python scripts/download_hayabusa.py` — downloads the latest release for the current OS/architecture from the GitHub API and extracts it to `./hayabusa/` (gitignored).
 - **Download a test sample**: `python scripts/download_sample_evtx.py` — fetches one real attack sample from [EVTX-ATTACK-SAMPLES](https://github.com/sbousseaden/EVTX-ATTACK-SAMPLES) into `./samples/` (gitignored).
+- **Download ATT&CK data**: `python scripts/download_attack_data.py` — fetches the MITRE ATT&CK Enterprise STIX bundle into `./attack/enterprise-attack.json` (gitignored, ~50MB). Required before `detection://attack/techniques/{technique_id}` will resolve.
 - **Run the server**: `python server.py` (stdio transport — blocks waiting for an MCP client; exits cleanly on stdin EOF if run with no client attached).
 - **Test**: `python tests/test_scan_evtx.py` — a manual script (not pytest) that calls `scan_evtx` and `get_hayabusa_rules` directly against the downloaded sample/rule set. No automated test framework is configured.
 - **Lint**: none configured.
-
-## Project goal
-
-An MCP server that wraps the Hayabusa CLI for EVTX (Windows Event Log) analysis.
-
-- Expose a `scan_evtx` tool that runs Hayabusa against EVTX files.
-- Return results as structured JSON.
-- Support filtering by severity level, rule title, and result count; support a trimmed vs. full output shape.
-- Expose a `get_hayabusa_rules` tool so a caller can discover what detection rules exist before scanning.
-- Handle errors gracefully.
 
 ## Architecture
 
@@ -43,8 +61,15 @@ An MCP server that wraps the Hayabusa CLI for EVTX (Windows Event Log) analysis.
   3. If `keyword` is given, keeps only rules where the (lowercased) keyword appears in the joined `title` + `description` + `tags`.
   4. Returns `{"keyword", "count", "returned", "truncated", "rules"}`, capped by `max_results` (default 50, since the full rule set is ~5,000 files).
   5. Returns `{"error": ...}` if the rules directory is missing or `max_results` is invalid.
-- **`scripts/download_hayabusa.py` and `scripts/download_sample_evtx.py`** use only `urllib`/`zipfile`/`json` (stdlib) and resolve URLs dynamically via the GitHub releases/tree API — no hardcoded version numbers or download URLs.
-- **`./hayabusa/`** (extracted binary + `rules/`/`config/`) and **`./samples/*.evtx`** are both gitignored — they're fetched on demand by the scripts above, not checked in.
+- **`SIGMA_RULES_DIR = <project root>/rules`** — the curated Sigma rule set (see above), kept as its own constant distinct from `RULES_DIR` (`HAYABUSA_DIR / "rules"`, the downloaded Hayabusa/Sigma checkout used by `get_hayabusa_rules`). `_sigma_rule_summary()` reuses `_parse_rule_summary()` (the same regex line-scan parser `get_hayabusa_rules` uses) but discards its `ruletype` field (meaningless for a flat, non-`hayabusa`/`sigma`-subdirectory layout) and adds `rule_name` (the filename stem) and `techniques` (ATT&CK IDs extracted from `tags:` via `_TECHNIQUE_TAG_RE`, matching `attack.t####` or `attack.t####.###`, case-insensitive).
+- **Four `detection://` MCP resources** (registered with `@mcp.resource(...)`, not `@mcp.tool()` — discoverable/browsable rather than invoked with arguments):
+  - **`detection://rules`** — static resource; returns `{"count", "rules"}` where each entry is a `_sigma_rule_summary()`.
+  - **`detection://rules/{rule_name}`** — template resource; returns the matching file's raw YAML text (`_find_sigma_rule_file()` matches the stem case-insensitively, with or without a `.yml`/`.yaml` suffix). Raises `ValueError` if no rule matches — FastMCP wraps this into a `ResourceError` automatically, so (unlike the tools) there's no `{"error": ...}` dict convention here; letting it raise is the idiomatic FastMCP resource pattern.
+  - **`detection://rules/by-technique/{technique_id}`** — template resource; returns `{"technique_id", "count", "rules"}` filtered by matching `technique_id` (normalized via `_normalize_technique_id()`: uppercased, `T` prefix added if missing) against each rule's derived `techniques` list. No match returns `count: 0`, not an error — an empty coverage result is a valid answer here, unlike an unresolvable single-rule lookup.
+  - **`detection://attack/techniques/{technique_id}`** — template resource; looks up the technique in `_load_attack_techniques()` (parsed once from `attack/enterprise-attack.json` and cached in `_attack_techniques_cache` for the process lifetime — the STIX bundle is ~50MB, too expensive to re-parse per request, and it doesn't change while the server runs), then cross-references it against every curated rule's derived `techniques`. Raises `ValueError` if `ATTACK_DATA_PATH` hasn't been downloaded yet or the technique ID doesn't exist in ATT&CK. Returns `{"technique_id", "name", "description", "is_subtechnique", "url", "rules", "rule_count", "coverage"}`, where `coverage` (via `_assess_technique_coverage()`) is `"covered"` (an exact-match rule exists), `"partial"` (no exact match, but the parent technique or a sibling sub-technique is covered by some rule — related detection logic may catch some but not all variants), or `"gap"` (nothing in `./rules/` references it at all, directly or via parent/child).
+  - FastMCP resolves the three `detection://rules...` URIs unambiguously because `{rule_name}`'s template regex (`[^/]+`, no slashes) can never match the longer `/by-technique/<id>` path — no explicit precedence/ordering logic was needed.
+- **`scripts/download_hayabusa.py` and `scripts/download_sample_evtx.py`** use only `urllib`/`zipfile`/`json` (stdlib) and resolve URLs dynamically via the GitHub releases/tree API — no hardcoded version numbers or download URLs. **`scripts/download_attack_data.py`** is simpler still: one fixed URL (the STIX bundle's location on the `master` branch doesn't need dynamic resolution the way a versioned release asset does), stdlib `urllib` only.
+- **`./hayabusa/`** (extracted binary + `rules/`/`config/`), **`./samples/*.evtx`**, and **`./attack/enterprise-attack.json`** are all gitignored — they're fetched on demand by the scripts above, not checked in.
 - **`.mcp.json`** (gitignored) registers this server with Claude Code locally (`python server.py`, `cwd` pinned to this project's absolute path). It's `.mcp.json`, not `.claude/settings.json`/`settings.local.json` — Claude Code only reads `mcpServers` from `.mcp.json` (project root) or `~/.claude.json` (via `claude mcp add`); the settings files are for permissions/hooks/env and silently ignore an `mcpServers` key. It's gitignored rather than committed because the `cwd` is machine-specific and would break for other collaborators/OSes.
 - **Claude Desktop registration** uses a different config, with a different launch shape than `.mcp.json`. On this machine Claude Desktop is the MSIX-packaged build (`Claude_pzs8sxrjxfjjc`), so Windows redirects its `%APPDATA%` to `C:\Users\<user>\AppData\Local\Packages\Claude_pzs8sxrjxfjjc\LocalCache\Roaming\Claude\claude_desktop_config.json` — the plain `%APPDATA%\Claude\claude_desktop_config.json` path is a different, inert file the packaged app never reads. That file also gets rewritten by the app on every launch and only preserves the `command`/`args` keys of each `mcpServers` entry — a `cwd` key is silently dropped. So the Claude Desktop entry passes an **absolute path to `server.py` in `args`** instead of relying on `cwd`:
   ```json

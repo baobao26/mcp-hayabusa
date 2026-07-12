@@ -1,12 +1,13 @@
 # mcp-hayabusa
 
-An MCP server that wraps the [Hayabusa](https://github.com/Yamato-Security/hayabusa) CLI, exposing a `scan_evtx` tool for analyzing Windows EVTX event log files and a `get_hayabusa_rules` tool for browsing its detection rule set, over the Model Context Protocol.
+An MCP server with two layers: it wraps the [Hayabusa](https://github.com/Yamato-Security/hayabusa) CLI, exposing a `scan_evtx` tool for analyzing Windows EVTX event log files and a `get_hayabusa_rules` tool for browsing its detection rule set; and it doubles as a detection-engineering knowledge base, exposing a curated Sigma rule set and MITRE ATT&CK technique/coverage lookups as `detection://` resources.
 
 ## Requirements
 
 - Python 3.10+ (uses the `X | None` type-hint syntax)
 - The `mcp` library (`pip install -r requirements.txt`)
 - The Hayabusa CLI, extracted to `./hayabusa/` (see Setup below)
+- The MITRE ATT&CK Enterprise STIX bundle, extracted to `./attack/` (see Setup below) — only required for the `detection://attack/techniques/{technique_id}` resource
 
 ## Setup
 
@@ -24,6 +25,14 @@ python scripts/download_sample_evtx.py
 ```
 
 Downloads one real attack-technique sample (`4794_DSRM_password_change_t1098.evtx`) from [EVTX-ATTACK-SAMPLES](https://github.com/sbousseaden/EVTX-ATTACK-SAMPLES) into `./samples/` (also gitignored).
+
+Required for the `detection://attack/techniques/{technique_id}` resource:
+
+```
+python scripts/download_attack_data.py
+```
+
+Downloads the MITRE ATT&CK Enterprise STIX bundle (~50MB) from [attack-stix-data](https://github.com/mitre-attack/attack-stix-data) into `./attack/enterprise-attack.json` (gitignored). Re-run it whenever you want to pick up a newer ATT&CK release — the server caches the parsed data in memory for the life of the process, so restart `server.py` afterward to pick up the change.
 
 ## Running the server
 
@@ -176,16 +185,87 @@ Rule fields are extracted with a lightweight line-scan, not a full YAML parser (
 | Rules directory missing | `Hayabusa rules directory not found: <dir>` |
 | Invalid `max_results` | `Invalid max_results '-1'. Must be >= 0.` |
 
+## Detection engineering knowledge base resources
+
+Alongside the two tools above, the server exposes a curated Sigma rule set (`./rules/`, checked into git — distinct from the full `./hayabusa/rules/` checkout used by `get_hayabusa_rules`) and MITRE ATT&CK lookups as four `detection://` MCP **resources**. Resources are browsable/discoverable rather than invoked with arguments, and a not-found lookup raises an MCP `ResourceError` instead of returning a `{"error": ...}` dict (that convention is tool-specific — see the `scan_evtx`/`get_hayabusa_rules` sections above).
+
+### `detection://rules`
+
+Lists all rules in `./rules/` (currently 24: hand-authored plus a curated selection copied from upstream [SigmaHQ/sigma](https://github.com/SigmaHQ/sigma), covering credential-access, lateral-movement, and persistence techniques).
+
+```json
+{
+  "count": 24,
+  "rules": [
+    {
+      "rule_name": "lsass_process_access",
+      "title": "Suspicious Process Access to LSASS Memory",
+      "id": "fe41d923-d63b-45bb-8c85-bbfb6886b6b3",
+      "level": "high",
+      "status": "test",
+      "tags": ["attack.credential-access", "attack.t1003.001", "attack.s0002"],
+      "techniques": ["T1003.001"],
+      "description": "Detects non-standard processes requesting access to lsass.exe with access"
+    }
+  ]
+}
+```
+
+### `detection://rules/{rule_name}`
+
+Returns one rule's raw YAML content, looked up by filename stem (case-insensitive, extension optional — `lsass_process_access`, `lsass_process_access.yml`, and `LSASS_Process_Access` all resolve the same file). Raises if `rule_name` doesn't match any file in `./rules/`.
+
+### `detection://rules/by-technique/{technique_id}`
+
+Lists rules tagged with a given ATT&CK technique ID (case-insensitive, `T` prefix optional — `t1003.001` and `T1003.001` are equivalent). An unmatched technique returns `count: 0`, not an error.
+
+```json
+{
+  "technique_id": "T1021.002",
+  "count": 2,
+  "rules": [ /* ... matching rule summaries, same shape as detection://rules ... */ ]
+}
+```
+
+### `detection://attack/techniques/{technique_id}`
+
+Looks up a technique in the downloaded MITRE ATT&CK data and cross-references it against `./rules/` in one call: what the technique is, whether we detect it, and how well.
+
+```json
+{
+  "technique_id": "T1003.001",
+  "name": "LSASS Memory",
+  "description": "Adversaries may attempt to access credential material stored in the process memory of the Local Security Authority Subsystem Service (LSASS)...",
+  "is_subtechnique": true,
+  "url": "https://attack.mitre.org/techniques/T1003/001",
+  "rules": [ /* ... matching rule summaries ... */ ],
+  "rule_count": 3,
+  "coverage": "covered"
+}
+```
+
+`coverage` is one of:
+
+| Value | Meaning |
+| --- | --- |
+| `covered` | At least one rule is tagged with this exact technique ID. |
+| `partial` | No exact-match rule, but the parent technique (for a sub-technique ID) or a sibling sub-technique (for a parent ID) is covered — related detection logic may catch some, but not all, variants. |
+| `gap` | Nothing in `./rules/` references this technique at all, directly or via parent/child. |
+
+Raises if the ATT&CK data hasn't been downloaded yet (run `scripts/download_attack_data.py` first) or if `technique_id` isn't a real ATT&CK technique.
+
 ## Testing
 
 ```
 python tests/test_scan_evtx.py
 ```
 
-A manual script (not a pytest suite) that exercises both tools: `scan_evtx` against the sample downloaded by `download_sample_evtx.py` (default/full `output_format`, `min_severity`, `rule_filter`, `max_results`, and error cases), and `get_hayabusa_rules` against the local rule set (default cap, `keyword` filtering, and error cases).
+A manual script (not a pytest suite) that exercises both tools: `scan_evtx` against the sample downloaded by `download_sample_evtx.py` (default/full `output_format`, `min_severity`, `rule_filter`, `max_results`, and error cases), and `get_hayabusa_rules` against the local rule set (default cap, `keyword` filtering, and error cases). It does not cover the `detection://` resources — those were verified manually via `mcp.read_resource()`.
 
 ## Notes
 
 - Severity filtering is delegated to Hayabusa's own `-m/--min-level` flag rather than reimplemented in Python; `rule_filter`, `output_format`, and `max_results` have no Hayabusa CLI equivalent, so they're applied as post-processing in Python.
 - Output parsing uses Hayabusa's `-L`/JSONL mode. Hayabusa's default `-o` (non-`-L`) output is pretty-printed JSON objects concatenated with no array wrapper — not valid JSON or JSONL — so `-L` is required for reliable parsing.
 - `get_hayabusa_rules` parses rule YAML with regex line-scanning instead of a full YAML parser, to avoid adding a PyYAML dependency for what's just a fuzzy listing tool — Hayabusa itself does the real YAML parsing when a rule is actually used to scan.
+- `./rules/` is a deliberately curated cross-section of upstream Sigma, not a full mirror (~4,700 files across all platforms) — that was considered and rejected: it would duplicate `./hayabusa/rules/`, blow up repo size, and (given `./rules/`'s flat, non-`hayabusa`/`sigma`-subdirectory layout) risk filename collisions in the by-stem rule lookup.
+- The MITRE ATT&CK STIX bundle (~50MB) is parsed once and cached in memory for the server process's lifetime, not re-parsed per request — it's static data that doesn't change while the server runs.

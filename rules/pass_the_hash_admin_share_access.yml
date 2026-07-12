@@ -1,0 +1,35 @@
+title: Lateral Movement to Admin Share Following NTLM-Only Network Logon
+id: 34fd6e3b-0786-4ba8-b165-0f126bec9390
+status: test
+description: |
+    Detects a Type 3 (Network) logon authenticated purely via NTLM (Event ID
+    4624) immediately followed by access to an administrative share such as
+    ADMIN$ or C$ (Event ID 5140) from the same source host, a pattern
+    consistent with Pass-the-Hash tooling (e.g. Impacket, CrackMapExec, PsExec
+    with a stolen hash) staging for remote execution.
+references:
+    - https://attack.mitre.org/techniques/T1550/002/
+    - https://github.com/SigmaHQ/sigma/blob/master/rules/windows/network_share/net_share_access_susp_admin_share.yml
+author: Detection Engineering KB
+date: 2026-07-12
+tags:
+    - attack.lateral-movement
+    - attack.t1550.002
+logsource:
+    product: windows
+    service: security
+detection:
+    selection_logon:
+        EventID: 4624
+        LogonType: 3
+        AuthenticationPackageName: 'NTLM'
+    selection_share:
+        EventID: 5140
+        ShareName|contains:
+            - '\ADMIN$'
+            - '\C$'
+    condition: selection_logon or selection_share
+falsepositives:
+    - Legitimate remote administration via PsExec, SCCM, or GPO software deployment
+    - Backup agents mounting administrative shares for host-level backups
+level: medium

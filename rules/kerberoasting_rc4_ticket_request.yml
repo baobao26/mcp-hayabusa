@@ -1,0 +1,33 @@
+title: Potential Kerberoasting via RC4 Service Ticket Request
+id: 04a1f767-766d-4d2f-b482-f1125d16c90d
+status: test
+description: |
+    Detects Kerberos service ticket requests (Event ID 4769) using the weaker
+    RC4-HMAC (0x17) encryption type for a non-machine account, a common
+    signature of Kerberoasting where an attacker requests service tickets for
+    accounts with an SPN and cracks them offline.
+references:
+    - https://attack.mitre.org/techniques/T1558/003/
+    - https://github.com/SigmaHQ/sigma/blob/master/rules/windows/builtin/security/win_security_susp_kerberos_rc4_ticket_request.yml
+author: Detection Engineering KB
+date: 2026-07-12
+tags:
+    - attack.credential-access
+    - attack.t1558.003
+    - attack.s0002
+logsource:
+    product: windows
+    service: security
+detection:
+    selection:
+        EventID: 4769
+        TicketEncryptionType: '0x17'
+    filter_machine_accounts:
+        ServiceName|endswith: '$'
+    filter_krbtgt:
+        ServiceName: 'krbtgt'
+    condition: selection and not 1 of filter_*
+falsepositives:
+    - Legacy applications or service accounts still configured to require RC4
+    - Domains without AES enforced via msDS-SupportedEncryptionTypes
+level: medium
