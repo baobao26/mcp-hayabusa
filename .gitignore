@@ -1,0 +1,11 @@
+hayabusa/
+*.zip
+samples/*.evtx
+
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+.claude/settings.local.json
+.mcp.json
