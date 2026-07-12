@@ -1,6 +1,6 @@
 # mcp-hayabusa
 
-An MCP server with two layers: it wraps the [Hayabusa](https://github.com/Yamato-Security/hayabusa) CLI, exposing a `scan_evtx` tool for analyzing Windows EVTX event log files and a `get_hayabusa_rules` tool for browsing its detection rule set; and it doubles as a detection-engineering knowledge base, exposing a curated Sigma rule set and MITRE ATT&CK technique/coverage lookups as `detection://` resources.
+An MCP server with two layers: it wraps the [Hayabusa](https://github.com/Yamato-Security/hayabusa) CLI, exposing a `scan_evtx` tool for analyzing Windows EVTX event log files and a `get_hayabusa_rules` tool for browsing its detection rule set; and it doubles as a detection-engineering knowledge base, exposing a curated Sigma rule set and MITRE ATT&CK technique/coverage lookups as `detection://` resources, plus an `analyze_coverage` tool for querying that coverage directly (by technique ID or by tactic).
 
 ## Requirements
 
@@ -187,7 +187,7 @@ Rule fields are extracted with a lightweight line-scan, not a full YAML parser (
 
 ## Detection engineering knowledge base resources
 
-Alongside the two tools above, the server exposes a curated Sigma rule set (`./rules/`, checked into git — distinct from the full `./hayabusa/rules/` checkout used by `get_hayabusa_rules`) and MITRE ATT&CK lookups as four `detection://` MCP **resources**. Resources are browsable/discoverable rather than invoked with arguments, and a not-found lookup raises an MCP `ResourceError` instead of returning a `{"error": ...}` dict (that convention is tool-specific — see the `scan_evtx`/`get_hayabusa_rules` sections above).
+Alongside the two tools above, the server exposes a curated Sigma rule set (`./rules/`, checked into git — distinct from the full `./hayabusa/rules/` checkout used by `get_hayabusa_rules`) and MITRE ATT&CK lookups as four `detection://` MCP **resources**. Resources are browsable/discoverable rather than invoked with arguments, and a not-found lookup raises an MCP `ResourceError` instead of returning a `{"error": ...}` dict (that convention is tool-specific — see the `scan_evtx`/`get_hayabusa_rules` sections above). A third tool, `analyze_coverage`, wraps this same data for direct technique/tactic coverage queries — see its own section below.
 
 ### `detection://rules`
 
@@ -254,13 +254,68 @@ Looks up a technique in the downloaded MITRE ATT&CK data and cross-references it
 
 Raises if the ATT&CK data hasn't been downloaded yet (run `scripts/download_attack_data.py` first) or if `technique_id` isn't a real ATT&CK technique.
 
+## The `analyze_coverage` tool
+
+```
+analyze_coverage(target: str) -> dict
+```
+
+A **tool** (not a resource) that answers the same "what's our coverage?" question as `detection://attack/techniques/{technique_id}`, but takes either a single technique ID *or* a whole tactic, and — for a tactic — reports coverage across every technique in it in one call, rather than requiring one lookup per technique. Combines the same two sources as the `detection://` resources above: the downloaded ATT&CK STIX data and the curated `./rules/` Sigma set.
+
+| Parameter | Required | Description |
+| --- | --- | --- |
+| `target` | yes | Either an ATT&CK technique ID (`"T1003.001"`, `"T1003"`, or bare `"1003.001"` — the `T` prefix is optional), or a tactic name/shortname, case- and spacing-insensitive (`"Credential Access"`, `"credential-access"`). |
+
+### Success response — technique
+
+```json
+{
+  "target_type": "technique",
+  "technique_id": "T1558.003",
+  "name": "Kerberoasting",
+  "tactics": ["credential-access"],
+  "coverage": "covered",
+  "rule_count": 2,
+  "rules": [ /* ... matching rule summaries, same shape as detection://rules ... */ ]
+}
+```
+
+### Success response — tactic
+
+```json
+{
+  "target_type": "tactic",
+  "tactic": "Credential Access",
+  "technique_count": 67,
+  "covered_count": 8,
+  "partial_count": 17,
+  "gap_count": 42,
+  "covered": [ {"technique_id": "T1003.001", "name": "LSASS Memory", "rule_count": 3}, "..." ],
+  "partial": [ /* same shape as covered */ ],
+  "gaps": [ /* same shape, rule_count is always 0 */ ]
+}
+```
+
+`coverage` (technique form) and each technique's bucket placement (tactic form) use the same `covered`/`partial`/`gap` logic documented under `detection://attack/techniques/{technique_id}` above.
+
+### Error response
+
+Like `scan_evtx`/`get_hayabusa_rules` (and unlike the `detection://` resources), failures return `{"error": ...}` rather than raising:
+
+| Situation | Example error |
+| --- | --- |
+| Empty/blank `target` | `target must be a non-empty technique ID or tactic name.` |
+| ATT&CK data not downloaded | `ATT&CK data not found at <path>. Run scripts/download_attack_data.py first.` |
+| Unknown technique ID | `Unknown ATT&CK technique: T9999` |
+| Unrecognized tactic name | `Unknown tactic '<target>'. Known tactics: Collection, Command and Control, ...` (lists all 15) |
+
 ## Testing
 
 ```
 python tests/test_scan_evtx.py
 ```
 
-A manual script (not a pytest suite) that exercises both tools: `scan_evtx` against the sample downloaded by `download_sample_evtx.py` (default/full `output_format`, `min_severity`, `rule_filter`, `max_results`, and error cases), and `get_hayabusa_rules` against the local rule set (default cap, `keyword` filtering, and error cases). It does not cover the `detection://` resources — those were verified manually via `mcp.read_resource()`.
+A manual script (not a pytest suite) that exercises the original two tools: `scan_evtx` against the sample downloaded by `download_sample_evtx.py` (default/full `output_format`, `min_severity`, `rule_filter`, `max_results`, and error cases), and `get_hayabusa_rules` against the local rule set (default cap, `keyword` filtering, and error cases). It does not cover the `detection://` resources or `analyze_coverage` — those were verified manually via `mcp.read_resource()` / direct calls to `analyze_coverage()`.
 
 ## Notes
 
