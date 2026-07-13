@@ -6,7 +6,9 @@ Last updated: 2026-07-12
 
 - Location: `C:\Users\PC\mcp-hayabusa`
 - Remote: `origin` -> `https://github.com/baobao26/mcp-hayabusa.git` (fetch/push)
-- Branch: `master`, tracking `origin/master`, up to date, 10 commits:
+- Branch: `master`, tracking `origin/master`, up to date, 12 commits:
+  - `88b91b5` — Add suggest_rule tool for coverage-gap remediation
+  - `3fc3dae` — Update STATE.md's commit list after the gap-closing pass
   - `20c0bd5` — Close Credential Access coverage gaps identified by analyze_coverage
   - `16f1fb3` — Fix remaining staleness in README/HANDOFF after analyze_coverage
   - `da966f1` — Bring STATE.md's commit list and file table current
