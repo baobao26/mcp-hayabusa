@@ -28,4 +28,18 @@ detection:
     condition: all of selection_*
 falsepositives:
     - Legitimate use of MiniDump for non-LSASS process troubleshooting (verify target PID)
+# critical: this is a specific, well-documented LOLBin technique (comsvcs.dll's
+# exported MiniDump function invoked via rundll32) with essentially no legitimate
+# reason to appear in normal admin workflows — the command-line shape itself is a
+# near-unambiguous signal of credential-dumping intent, not just anomalous access.
 level: critical
+
+# Test case: matches an event with
+#   Image: C:\Windows\System32\rundll32.exe
+#   CommandLine: rundll32.exe C:\Windows\System32\comsvcs.dll, MiniDump 624 C:\Windows\Temp\lsass.dmp full
+# Also matches the ordinal-export variant (#24 is comsvcs.dll's MiniDump export
+# number, sometimes used to dodge string matches on the literal word "MiniDump"):
+#   CommandLine: rundll32.exe C:\Windows\System32\comsvcs.dll #24 624 C:\Windows\Temp\lsass.dmp full
+# Should NOT match: Image: C:\tools\loader.exe with the same comsvcs.dll/MiniDump
+#   command-line arguments — confirms selection_img (rundll32.exe specifically) is
+#   load-bearing and the rule doesn't fire on the DLL export alone.

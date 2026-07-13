@@ -1,0 +1,54 @@
+title: Kerberos Golden Ticket via RC4-Encrypted TGS with Forged Ticket Options
+id: 7e2b4f1a-9c3d-4e6a-8f2b-1a5d6c9e0b7f
+status: test
+description: |
+    Detects Kerberos service ticket (TGS) requests (Event ID 4769) using RC4-HMAC
+    encryption combined with the specific ticket-options bitmask commonly produced
+    by offline ticket-forging tools (e.g. mimikatz `kerberos::golden`). A forged
+    "Golden Ticket" is built from a stolen krbtgt hash without going through a real
+    AS-REQ/AS-REP exchange, so it typically surfaces as a TGS request whose
+    encryption type and option flags don't match what a domain's real Kerberos
+    clients produce once AES is enforced.
+references:
+    - https://attack.mitre.org/techniques/T1558/001/
+    - https://adsecurity.org/?p=1640
+    - https://adsecurity.org/?p=483
+author: Detection Engineering KB
+date: 2026-07-13
+tags:
+    - attack.credential-access
+    - attack.t1558.001
+logsource:
+    product: windows
+    service: security
+detection:
+    selection:
+        EventID: 4769
+        TicketEncryptionType: '0x17'
+        TicketOptions: '0x40810000'
+    condition: selection
+falsepositives:
+    - Legacy domain controllers, member servers, or third-party Kerberos clients
+      that do not support AES and still negotiate RC4-HMAC by default (common on
+      domains that have not raised the functional level or disabled RC4 via
+      the "Network security: Configure encryption types allowed for Kerberos"
+      policy)
+    - Applications or service accounts explicitly configured to require RC4
+      (msDS-SupportedEncryptionTypes not set to AES)
+# high: the RC4-encryption-type-plus-forged-ticket-options combination is a strong,
+# specific signal used by well-documented golden-ticket tooling, but on domains
+# that haven't fully deprecated RC4 the same combination can occur legitimately
+# (see falsepositives) — one notch below critical until RC4 is confirmed disabled
+# for the environment, at which point this should be escalated.
+level: high
+
+# Test case: matches an event with
+#   EventID: 4769
+#   TicketEncryptionType: 0x17
+#   TicketOptions: 0x40810000
+#   ServiceName: some-file-server$ (arbitrary target service, not krbtgt --
+#   golden tickets are used to request access to any service, not just re-request
+#   a TGT)
+# Should NOT match: EventID 4769 with TicketEncryptionType: 0x12 (AES256-CTS-HMAC),
+#   the expected encryption type on a modern, fully AES-enforced domain -- confirms
+#   the rule keys off the encryption downgrade, not the ticket-options value alone.
