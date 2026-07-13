@@ -1,0 +1,54 @@
+title: Azure AD Sign-In via ROPC (Resource Owner Password Credentials) Flow
+id: 3f8c1e2d-6b4a-4d9f-9c7e-2a5b8d1f4e6c
+status: test
+description: |
+    Detects Azure AD / Entra ID sign-in events using the ROPC (Resource Owner
+    Password Credentials) OAuth2 flow, in which a client exchanges a raw
+    username/password directly for a token without an interactive sign-in page.
+    Because there is no interactive prompt, ROPC cannot enforce MFA or most
+    Conditional Access controls, making it an attractive path for an adversary
+    who already holds valid credentials to obtain tokens while evading the
+    protections a normal interactive sign-in would trigger. Microsoft recommends
+    disabling ROPC tenant-wide unless a specific legacy application requires it.
+references:
+    - https://attack.mitre.org/techniques/T1078/004/
+    - https://learn.microsoft.com/en-us/entra/identity-platform/v2-oauth-ropc
+    - https://learn.microsoft.com/en-us/entra/identity/monitoring-health/reference-azure-monitor-sign-ins-log-schema
+author: Detection Engineering KB
+date: 2026-07-13
+tags:
+    - attack.initial-access
+    - attack.persistence
+    - attack.t1078.004
+logsource:
+    product: azure
+    service: signinlogs
+detection:
+    selection:
+        AuthenticationProtocol: 'ropc'
+    condition: selection
+falsepositives:
+    - Legacy line-of-business applications deliberately configured to use ROPC
+      because they cannot support interactive/modern authentication (these
+      should be inventoried and, where possible, migrated off ROPC — Microsoft
+      recommends disabling the flow tenant-wide once no caller depends on it)
+    - Automation, migration, or monitoring scripts built on older auth
+      libraries (e.g. ADAL-based tooling, some legacy Exchange Online
+      PowerShell versions) that default to ROPC instead of device code or
+      authorization code flows
+# medium: ROPC is a genuine MFA/Conditional-Access bypass and a meaningful signal
+# on tenants that have already deprecated legacy auth, but plenty of tenants still
+# have known, legitimate ROPC callers (see falsepositives) — treat this as a
+# triage/inventory signal first; once an environment confirms ROPC is fully
+# disabled or allowlisted, matches here should be escalated to high/critical.
+level: medium
+
+# Test case: matches an event with
+#   AuthenticationProtocol: ropc
+#   AppDisplayName: Legacy Line-of-Business App
+#   UserPrincipalName: jdoe@contoso.com
+#   ConditionalAccessStatus: notApplied
+# Should NOT match: AuthenticationProtocol: oAuth2AuthorizationCode (a normal
+#   interactive modern-auth sign-in that can enforce MFA/Conditional Access) —
+#   confirms the selection keys specifically on the ROPC protocol value, not on
+#   sign-ins in general.
