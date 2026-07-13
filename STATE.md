@@ -6,7 +6,8 @@ Last updated: 2026-07-12
 
 - Location: `C:\Users\PC\mcp-hayabusa`
 - Remote: `origin` -> `https://github.com/baobao26/mcp-hayabusa.git` (fetch/push)
-- Branch: `master`, tracking `origin/master`, up to date, 12 commits:
+- Branch: `master`, tracking `origin/master`, up to date, 13 commits:
+  - `abe12e9` — Update STATE.md's commit list after suggest_rule
   - `88b91b5` — Add suggest_rule tool for coverage-gap remediation
   - `3fc3dae` — Update STATE.md's commit list after the gap-closing pass
   - `20c0bd5` — Close Credential Access coverage gaps identified by analyze_coverage
@@ -24,7 +25,7 @@ Last updated: 2026-07-12
 
 ## What's been built since the last snapshot
 
-A detection-engineering knowledge base layer, alongside the original Hayabusa-scanning server — the layer itself plus `analyze_coverage` landed in `ab12b59`, with follow-up commits (`7e21e0d`, `a1cd588`, `d42d201`) updating this file and the docs:
+A detection-engineering knowledge base layer, alongside the original Hayabusa-scanning server — the layer itself plus `analyze_coverage` landed in `ab12b59`, with `suggest_rule` and the Credential Access gap-closing pass following in later commits (see the commit list above for the full history; not enumerated here since it grows every session):
 
 - **`rules/`** — 31 curated Sigma rules (YAML), checked into git: 6 hand-authored covering T1003.001 (LSASS access), T1558.003 (Kerberoasting), T1003.006 (DCSync), T1550.002 (Pass-the-Hash), plus 25 unmodified rules copied from upstream [SigmaHQ/sigma](https://github.com/SigmaHQ/sigma) (attribution preserved) broadening coverage across credential-access, lateral-movement, and persistence techniques. Deliberately curated, not a full mirror of upstream (~4,700 files) — see CLAUDE.md for why. 7 of the 25 were added in a later gap-closing pass targeting `analyze_coverage`-identified Credential Access gaps (see below).
 - **`scripts/download_attack_data.py`** — fetches the MITRE ATT&CK Enterprise STIX bundle into `./attack/enterprise-attack.json` (gitignored, ~50MB), same fetch-on-demand pattern as `download_hayabusa.py`/`download_sample_evtx.py`.

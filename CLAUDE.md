@@ -45,7 +45,7 @@ Expanded scope (detection engineering knowledge base):
 
 ## Architecture
 
-- **`server.py`** is the whole server. `FastMCP("hayabusa")` instance, two `@mcp.tool()`-decorated functions (`scan_evtx`, `get_hayabusa_rules`), `main()` calls `mcp.run()`.
+- **`server.py`** is the whole server. `FastMCP("hayabusa")` instance, four `@mcp.tool()`-decorated functions (`scan_evtx`, `get_hayabusa_rules`, `analyze_coverage`, `suggest_rule`), four `@mcp.resource(...)`-decorated `detection://` resources, `main()` calls `mcp.run()`.
 - **`scan_evtx(file_path, min_severity=None, rule_filter=None, output_format="summary", max_results=None) -> dict`**:
   1. Checks `file_path` exists.
   2. Validates `min_severity` against `SEVERITY_LEVELS` (`informational`, `low`, `medium`, `high`, `critical`), `output_format` against `OUTPUT_FORMATS` (`summary`, `full`), and `max_results` (must be `>= 0` if given).
