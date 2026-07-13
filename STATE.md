@@ -6,7 +6,10 @@ Last updated: 2026-07-12
 
 - Location: `C:\Users\PC\mcp-hayabusa`
 - Remote: `origin` -> `https://github.com/baobao26/mcp-hayabusa.git` (fetch/push)
-- Branch: `master`, tracking `origin/master`, up to date, 4 commits:
+- Branch: `master`, tracking `origin/master`, up to date, 7 commits:
+  - `d42d201` — Update HANDOFF's stale no-commits note
+  - `a1cd588` — Document analyze_coverage in README and HANDOFF
+  - `7e21e0d` — Update STATE.md with ab12b59 commit and analyze_coverage tool
   - `ab12b59` — Add detection engineering knowledge base and analyze_coverage tool
   - `4f2d5c8` — Update STATE.md with commit history and Claude Desktop registration
   - `c4e5d04` — Add MCP server implementation, scripts, tests, and project state
@@ -16,7 +19,7 @@ Last updated: 2026-07-12
 
 ## What's been built since the last snapshot
 
-A detection-engineering knowledge base layer, alongside the original Hayabusa-scanning server, all committed and pushed in `ab12b59`:
+A detection-engineering knowledge base layer, alongside the original Hayabusa-scanning server — the layer itself plus `analyze_coverage` landed in `ab12b59`, with follow-up commits (`7e21e0d`, `a1cd588`, `d42d201`) updating this file and the docs:
 
 - **`rules/`** — 24 curated Sigma rules (YAML), checked into git: 6 hand-authored covering T1003.001 (LSASS access), T1558.003 (Kerberoasting), T1003.006 (DCSync), T1550.002 (Pass-the-Hash), plus 18 unmodified rules copied from upstream [SigmaHQ/sigma](https://github.com/SigmaHQ/sigma) (attribution preserved) broadening coverage across credential-access, lateral-movement, and persistence techniques. Deliberately curated, not a full mirror of upstream (~4,700 files) — see CLAUDE.md for why.
 - **`scripts/download_attack_data.py`** — fetches the MITRE ATT&CK Enterprise STIX bundle into `./attack/enterprise-attack.json` (gitignored, ~50MB), same fetch-on-demand pattern as `download_hayabusa.py`/`download_sample_evtx.py`.
@@ -41,8 +44,8 @@ Full design rationale for both layers is in CLAUDE.md's Architecture section.
 | `rules/` | 24 curated Sigma detection rules (YAML), checked into git |
 | `tests/test_scan_evtx.py` | Manual script calling `scan_evtx` and `get_hayabusa_rules` directly against the sample/rule set |
 | `CLAUDE.md` | Project spec / guidance for Claude Code |
-| `README.md` | Setup, usage, and tool/response reference (not yet updated for the `detection://` resources) |
-| `HANDOFF.md` | What was built, how to use it, what's left, and why key decisions were made (covers the original Hayabusa-scanning layer only) |
+| `README.md` | Setup, usage, and tool/response reference — covers `scan_evtx`, `get_hayabusa_rules`, the four `detection://` resources, and `analyze_coverage` |
+| `HANDOFF.md` | What was built, how to use it, what's left, and why key decisions were made — covers both the original Hayabusa-scanning layer and the detection-engineering knowledge base layer (including `analyze_coverage`) |
 | `.gitignore` | Excludes `hayabusa/`, `*.zip`, `samples/*.evtx`, `attack/`, `.mcp.json`, Python build artifacts |
 | `.mcp.json` | Registers this server with Claude Code locally (`python server.py`, machine-specific `cwd`) — gitignored. Not `.claude/settings.local.json`, which Claude Code doesn't read `mcpServers` from. |
 | `hayabusa/` | Extracted Hayabusa binary + `rules/`/`config/` — gitignored, fetched on demand |
@@ -64,4 +67,3 @@ See `HANDOFF.md` → "What's left to do" for the original Hayabusa-scanning laye
 
 - `mappings/` (explicit, hand-curated ATT&CK technique-to-rule mapping files) — planned, not started; current technique lookups are all derived on the fly from rule tags.
 - `tests/test_scan_evtx.py` only covers the original two tools — no automated check for the `detection://` resources or `analyze_coverage` (all verified manually in-session).
-- Neither `README.md` nor `HANDOFF.md` document `analyze_coverage` yet — they cover the `detection://` resources but predate this tool.
