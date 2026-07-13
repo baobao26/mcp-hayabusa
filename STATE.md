@@ -21,7 +21,7 @@ Last updated: 2026-07-12
 
 A detection-engineering knowledge base layer, alongside the original Hayabusa-scanning server — the layer itself plus `analyze_coverage` landed in `ab12b59`, with follow-up commits (`7e21e0d`, `a1cd588`, `d42d201`) updating this file and the docs:
 
-- **`rules/`** — 24 curated Sigma rules (YAML), checked into git: 6 hand-authored covering T1003.001 (LSASS access), T1558.003 (Kerberoasting), T1003.006 (DCSync), T1550.002 (Pass-the-Hash), plus 18 unmodified rules copied from upstream [SigmaHQ/sigma](https://github.com/SigmaHQ/sigma) (attribution preserved) broadening coverage across credential-access, lateral-movement, and persistence techniques. Deliberately curated, not a full mirror of upstream (~4,700 files) — see CLAUDE.md for why.
+- **`rules/`** — 31 curated Sigma rules (YAML), checked into git: 6 hand-authored covering T1003.001 (LSASS access), T1558.003 (Kerberoasting), T1003.006 (DCSync), T1550.002 (Pass-the-Hash), plus 25 unmodified rules copied from upstream [SigmaHQ/sigma](https://github.com/SigmaHQ/sigma) (attribution preserved) broadening coverage across credential-access, lateral-movement, and persistence techniques. Deliberately curated, not a full mirror of upstream (~4,700 files) — see CLAUDE.md for why. 7 of the 25 were added in a later gap-closing pass targeting `analyze_coverage`-identified Credential Access gaps (see below).
 - **`scripts/download_attack_data.py`** — fetches the MITRE ATT&CK Enterprise STIX bundle into `./attack/enterprise-attack.json` (gitignored, ~50MB), same fetch-on-demand pattern as `download_hayabusa.py`/`download_sample_evtx.py`.
 - **Four `detection://` MCP resources in `server.py`**:
   - `detection://rules` — list all curated rules
@@ -29,6 +29,7 @@ A detection-engineering knowledge base layer, alongside the original Hayabusa-sc
   - `detection://rules/by-technique/{technique_id}` — rules tagged with a given ATT&CK ID
   - `detection://attack/techniques/{technique_id}` — ATT&CK technique name/description plus coverage assessment (`covered`/`partial`/`gap`) against `rules/`
 - **`analyze_coverage` tool in `server.py`** — same coverage assessment as the ATT&CK resource above, but invocable as a tool rather than browsed, and accepts either a single technique ID (`"T1003.001"`) or a tactic name (`"Credential Access"` / `"credential-access"`), in which case it reports covered/partial/gap counts across every technique in that tactic. Reuses `_load_attack_techniques`/`_assess_technique_coverage`; adds `_load_attack_tactics` (same STIX-bundle-cached pattern) and `_normalize_tactic_name`.
+- **7 new `sigmahq_` rules closing Credential Access gaps** — AS-REP Roasting (T1558.004), Impacket SecretDump (T1003.002/.003/.004 in one rule), a second NTDS.DIT-exfil rule (T1003.003), findstr password recon (T1552.001), Chromium profile-data access (T1555.003, plus a bonus T1539 tag), and two PowerShell-keylogger rules (T1056.001). Fetched fresh from the real SigmaHQ GitHub repo (not the local Hayabusa checkout, which turned out to be a transformed copy — see HANDOFF.md's "Closing analyze_coverage gaps" section for why that mattered). Moved Credential Access from 8/67 to 16/67 covered. T1558.001/.002 (Golden/Silver Ticket) were dropped from scope — no dedicated upstream rule exists for either.
 
 Full design rationale for both layers is in CLAUDE.md's Architecture section.
 
@@ -41,7 +42,7 @@ Full design rationale for both layers is in CLAUDE.md's Architecture section.
 | `scripts/download_hayabusa.py` | Downloads the latest Hayabusa release for this OS/arch into `./hayabusa/` |
 | `scripts/download_sample_evtx.py` | Downloads a sample attack EVTX into `./samples/` |
 | `scripts/download_attack_data.py` | Downloads the MITRE ATT&CK STIX bundle into `./attack/` |
-| `rules/` | 24 curated Sigma detection rules (YAML), checked into git |
+| `rules/` | 31 curated Sigma detection rules (YAML), checked into git |
 | `tests/test_scan_evtx.py` | Manual script calling `scan_evtx` and `get_hayabusa_rules` directly against the sample/rule set |
 | `CLAUDE.md` | Project spec / guidance for Claude Code |
 | `README.md` | Setup, usage, and tool/response reference — covers `scan_evtx`, `get_hayabusa_rules`, the four `detection://` resources, and `analyze_coverage` |

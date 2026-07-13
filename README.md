@@ -191,11 +191,11 @@ Alongside the two tools above, the server exposes a curated Sigma rule set (`./r
 
 ### `detection://rules`
 
-Lists all rules in `./rules/` (currently 24: hand-authored plus a curated selection copied from upstream [SigmaHQ/sigma](https://github.com/SigmaHQ/sigma), covering credential-access, lateral-movement, and persistence techniques).
+Lists all rules in `./rules/` (currently 31: hand-authored plus a curated selection copied from upstream [SigmaHQ/sigma](https://github.com/SigmaHQ/sigma), covering credential-access, lateral-movement, and persistence techniques).
 
 ```json
 {
-  "count": 24,
+  "count": 31,
   "rules": [
     {
       "rule_name": "lsass_process_access",
@@ -287,9 +287,9 @@ A **tool** (not a resource) that answers the same "what's our coverage?" questio
   "target_type": "tactic",
   "tactic": "Credential Access",
   "technique_count": 67,
-  "covered_count": 8,
-  "partial_count": 17,
-  "gap_count": 42,
+  "covered_count": 16,
+  "partial_count": 18,
+  "gap_count": 33,
   "covered": [ {"technique_id": "T1003.001", "name": "LSASS Memory", "rule_count": 3}, "..." ],
   "partial": [ /* same shape as covered */ ],
   "gaps": [ /* same shape, rule_count is always 0 */ ]
