@@ -5,6 +5,8 @@ import platform
 import re
 import subprocess
 import tempfile
+import uuid
+from datetime import date
 from pathlib import Path
 
 from mcp.server.fastmcp import FastMCP
@@ -452,6 +454,7 @@ def _load_attack_techniques() -> dict[str, dict]:
             "is_subtechnique": bool(obj.get("x_mitre_is_subtechnique", False)),
             "url": url,
             "tactics": tactics,
+            "platforms": obj.get("x_mitre_platforms", []),
         }
 
     _attack_techniques_cache = techniques
@@ -627,6 +630,213 @@ def analyze_coverage(target: str) -> dict:
         "partial": partial,
         "gaps": gaps,
     }
+
+
+_attack_analytics_cache: dict[str, list[dict]] | None = None
+
+
+def _load_attack_detection_analytics() -> dict[str, list[dict]]:
+    """Load and cache MITRE's own suggested detection analytics, keyed by technique ID.
+
+    Newer ATT&CK STIX bundles link each attack-pattern to one or more
+    x-mitre-detection-strategy objects via a "detects" relationship; each
+    strategy in turn references x-mitre-analytic objects carrying a
+    human-written detection description and candidate log sources — real
+    MITRE-authored detection guidance, independent of anything in ./rules/.
+    Not every technique has one. Parsed once per process from the same STIX
+    bundle as _load_attack_techniques/_load_attack_tactics, for the same
+    reasons (large file, static for the process lifetime).
+    """
+    global _attack_analytics_cache
+    if _attack_analytics_cache is not None:
+        return _attack_analytics_cache
+
+    if not ATTACK_DATA_PATH.is_file():
+        raise FileNotFoundError(
+            f"ATT&CK data not found at {ATTACK_DATA_PATH}. "
+            "Run scripts/download_attack_data.py first."
+        )
+
+    with open(ATTACK_DATA_PATH, encoding="utf-8") as f:
+        bundle = json.load(f)
+
+    objects_by_id = {obj["id"]: obj for obj in bundle.get("objects", []) if "id" in obj}
+
+    technique_id_by_stix_id: dict[str, str] = {}
+    for obj in bundle.get("objects", []):
+        if obj.get("type") != "attack-pattern":
+            continue
+        for ref in obj.get("external_references", []):
+            if ref.get("source_name") == "mitre-attack":
+                technique_id_by_stix_id[obj["id"]] = ref["external_id"].upper()
+                break
+
+    analytics: dict[str, list[dict]] = {}
+    for obj in bundle.get("objects", []):
+        if obj.get("type") != "relationship" or obj.get("relationship_type") != "detects":
+            continue
+        technique_id = technique_id_by_stix_id.get(obj.get("target_ref"))
+        strategy = objects_by_id.get(obj.get("source_ref"))
+        if technique_id is None or strategy is None:
+            continue
+
+        for analytic_ref in strategy.get("x_mitre_analytic_refs", []):
+            analytic = objects_by_id.get(analytic_ref)
+            if analytic is None:
+                continue
+            log_sources = [
+                {"name": ls.get("name"), "channel": ls.get("channel")}
+                for ls in analytic.get("x_mitre_log_source_references", [])
+            ]
+            analytics.setdefault(technique_id, []).append({
+                "name": analytic.get("name"),
+                "description": analytic.get("description"),
+                "log_sources": log_sources,
+            })
+
+    _attack_analytics_cache = analytics
+    return analytics
+
+
+def _slugify(name: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "_", name.lower()).strip("_")
+
+
+def _write_rule_template(technique_id: str, technique: dict, analytics: list[dict]) -> Path:
+    """Write a skeleton Sigma rule for technique_id into ./rules/. Raises FileExistsError if already present."""
+    filename = f"suggested_{technique_id.lower().replace('.', '_')}_{_slugify(technique['name'])}.yml"
+    path = SIGMA_RULES_DIR / filename
+    if path.exists():
+        raise FileExistsError(f"Template already exists: {filename}")
+
+    description = technique["description"].strip().split("\n\n")[0]
+    if len(description) > 400:
+        description = description[:400].rsplit(" ", 1)[0] + "..."
+
+    if analytics:
+        log_source_hint = "; ".join(
+            ls["name"] for a in analytics for ls in a["log_sources"] if ls.get("name")
+        )
+    else:
+        log_source_hint = "TODO: identify a relevant Windows Event Log/Sysmon channel"
+
+    content = f"""title: Suggested Detection for {technique['name']} ({technique_id})
+id: {uuid.uuid4()}
+status: experimental
+description: |
+    {description}
+    TODO: this is a generated template, not a working rule. Replace the
+    detection: block below with real logic before use.
+    Candidate log sources: {log_source_hint}
+references:
+    - {technique['url']}
+author: suggest_rule (generated template)
+date: {date.today().isoformat()}
+tags:
+    - attack.{technique_id.lower()}
+logsource:
+    product: windows
+    # TODO: set category/service, e.g. process_creation, security, ps_script
+detection:
+    selection: {{}}  # TODO: fill in real detection logic
+    condition: selection
+falsepositives:
+    - Unknown
+level: medium
+"""
+    path.write_text(content, encoding="utf-8")
+    return path
+
+
+@mcp.tool()
+def suggest_rule(technique_id: str, create_template: bool = False) -> dict:
+    """Check detection coverage for an ATT&CK technique and suggest how to close the gap.
+
+    Looks up existing coverage the same way detection://attack/techniques/{technique_id}
+    and analyze_coverage do. If the technique is already covered, returns the
+    existing rules and stops there. Otherwise, surfaces MITRE's own suggested
+    detection analytics for the technique (log sources + description) when
+    available, plus any related rules covering a parent/sibling technique.
+    Optionally writes a skeleton Sigma rule into ./rules/ to start from.
+
+    Args:
+        technique_id: An ATT&CK technique ID, e.g. "T1552.006" or "T1552".
+        create_template: If true and the technique isn't already covered,
+            write a skeleton rule file into ./rules/ (fails if one already
+            exists for this technique).
+    """
+    needle = _normalize_technique_id(technique_id)
+
+    try:
+        techniques = _load_attack_techniques()
+    except FileNotFoundError as exc:
+        return {"error": str(exc)}
+
+    technique = techniques.get(needle)
+    if technique is None:
+        return {"error": f"Unknown ATT&CK technique: {technique_id}"}
+
+    all_rules = [
+        summary for path in _list_sigma_rule_files() if (summary := _sigma_rule_summary(path))
+    ]
+    matching_rules = [rule for rule in all_rules if needle in rule["techniques"]]
+    coverage = _assess_technique_coverage(needle, matching_rules, all_rules)
+
+    if coverage == "covered":
+        return {
+            "technique_id": needle,
+            "name": technique["name"],
+            "coverage": coverage,
+            "existing_rules": matching_rules,
+            "message": "Already covered by ./rules/ — no suggestion needed.",
+        }
+
+    parent = needle.split(".")[0] if "." in needle else None
+    related_rules = [
+        rule
+        for rule in all_rules
+        if (parent and parent in rule["techniques"])
+        or any(t.startswith(f"{needle}.") for t in rule["techniques"])
+    ]
+
+    try:
+        analytics = _load_attack_detection_analytics().get(needle, [])
+    except FileNotFoundError as exc:
+        return {"error": str(exc)}
+
+    notes = (
+        "MITRE-published analytics above are a starting point for a Sigma rule's detection: block."
+        if analytics
+        else (
+            "No MITRE-published detection strategy for this technique. Review the "
+            f"technique description and its platforms ({', '.join(technique['platforms']) or 'unspecified'}) "
+            "manually to pick a log source."
+        )
+    )
+
+    result = {
+        "technique_id": needle,
+        "name": technique["name"],
+        "coverage": coverage,
+        "related_rules": related_rules,
+        "suggestion": {
+            "mitre_analytics": analytics,
+            "notes": notes,
+        },
+        "template_created": False,
+        "template_path": None,
+    }
+
+    if create_template:
+        try:
+            path = _write_rule_template(needle, technique, analytics)
+        except FileExistsError as exc:
+            result["error"] = str(exc)
+        else:
+            result["template_created"] = True
+            result["template_path"] = str(path.relative_to(Path(__file__).resolve().parent))
+
+    return result
 
 
 def main() -> None:

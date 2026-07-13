@@ -1,13 +1,13 @@
 # mcp-hayabusa
 
-An MCP server with two layers: it wraps the [Hayabusa](https://github.com/Yamato-Security/hayabusa) CLI, exposing a `scan_evtx` tool for analyzing Windows EVTX event log files and a `get_hayabusa_rules` tool for browsing its detection rule set; and it doubles as a detection-engineering knowledge base, exposing a curated Sigma rule set and MITRE ATT&CK technique/coverage lookups as `detection://` resources, plus an `analyze_coverage` tool for querying that coverage directly (by technique ID or by tactic).
+An MCP server with two layers: it wraps the [Hayabusa](https://github.com/Yamato-Security/hayabusa) CLI, exposing a `scan_evtx` tool for analyzing Windows EVTX event log files and a `get_hayabusa_rules` tool for browsing its detection rule set; and it doubles as a detection-engineering knowledge base, exposing a curated Sigma rule set and MITRE ATT&CK technique/coverage lookups as `detection://` resources, an `analyze_coverage` tool for querying that coverage directly (by technique ID or by tactic), and a `suggest_rule` tool that, for an uncovered technique, surfaces MITRE's own suggested detection approach and can scaffold a rule template into `./rules/`.
 
 ## Requirements
 
 - Python 3.10+ (uses the `X | None` type-hint syntax)
 - The `mcp` library (`pip install -r requirements.txt`)
 - The Hayabusa CLI, extracted to `./hayabusa/` (see Setup below)
-- The MITRE ATT&CK Enterprise STIX bundle, extracted to `./attack/` (see Setup below) — only required for the `detection://attack/techniques/{technique_id}` resource and the `analyze_coverage` tool
+- The MITRE ATT&CK Enterprise STIX bundle, extracted to `./attack/` (see Setup below) — only required for the `detection://attack/techniques/{technique_id}` resource and the `analyze_coverage`/`suggest_rule` tools
 
 ## Setup
 
@@ -26,7 +26,7 @@ python scripts/download_sample_evtx.py
 
 Downloads one real attack-technique sample (`4794_DSRM_password_change_t1098.evtx`) from [EVTX-ATTACK-SAMPLES](https://github.com/sbousseaden/EVTX-ATTACK-SAMPLES) into `./samples/` (also gitignored).
 
-Required for the `detection://attack/techniques/{technique_id}` resource and the `analyze_coverage` tool:
+Required for the `detection://attack/techniques/{technique_id}` resource and the `analyze_coverage`/`suggest_rule` tools:
 
 ```
 python scripts/download_attack_data.py
@@ -187,7 +187,7 @@ Rule fields are extracted with a lightweight line-scan, not a full YAML parser (
 
 ## Detection engineering knowledge base resources
 
-Alongside the two tools above, the server exposes a curated Sigma rule set (`./rules/`, checked into git — distinct from the full `./hayabusa/rules/` checkout used by `get_hayabusa_rules`) and MITRE ATT&CK lookups as four `detection://` MCP **resources**. Resources are browsable/discoverable rather than invoked with arguments, and a not-found lookup raises an MCP `ResourceError` instead of returning a `{"error": ...}` dict (that convention is tool-specific — see the `scan_evtx`/`get_hayabusa_rules` sections above). A third tool, `analyze_coverage`, wraps this same data for direct technique/tactic coverage queries — see its own section below.
+Alongside the two tools above, the server exposes a curated Sigma rule set (`./rules/`, checked into git — distinct from the full `./hayabusa/rules/` checkout used by `get_hayabusa_rules`) and MITRE ATT&CK lookups as four `detection://` MCP **resources**. Resources are browsable/discoverable rather than invoked with arguments, and a not-found lookup raises an MCP `ResourceError` instead of returning a `{"error": ...}` dict (that convention is tool-specific — see the `scan_evtx`/`get_hayabusa_rules` sections above). Two more tools wrap this same data: `analyze_coverage` for direct technique/tactic coverage queries, and `suggest_rule` for turning an uncovered technique into a detection suggestion (and optionally a rule scaffold) — see their own sections below.
 
 ### `detection://rules`
 
@@ -309,13 +309,78 @@ Like `scan_evtx`/`get_hayabusa_rules` (and unlike the `detection://` resources),
 | Unknown technique ID | `Unknown ATT&CK technique: T9999` |
 | Unrecognized tactic name | `Unknown tactic '<target>'. Known tactics: Collection, Command and Control, ...` (lists all 15) |
 
+## The `suggest_rule` tool
+
+```
+suggest_rule(technique_id: str, create_template: bool = False) -> dict
+```
+
+Checks coverage for a single ATT&CK technique the same way `analyze_coverage`/`detection://attack/techniques/{technique_id}` do. If it's already `"covered"`, returns the existing rules and stops. Otherwise, surfaces MITRE's own suggested detection approach (when one exists) and, optionally, scaffolds a starting-point rule file into `./rules/`.
+
+MITRE's detection guidance comes from the ATT&CK STIX bundle itself, not from `./rules/`: newer ATT&CK data links each technique to one or more "detection strategies," each carrying one or more "analytics" — a human-written description of what to look for, plus candidate log sources. Not every technique has one; when a technique has none, `suggestion.mitre_analytics` is an empty list and `suggestion.notes` says so.
+
+| Parameter | Required | Description |
+| --- | --- | --- |
+| `technique_id` | yes | An ATT&CK technique ID, e.g. `"T1552.006"` or `"T1552"` (same normalization as `analyze_coverage`: `T` prefix optional). |
+| `create_template` | no | If `true` and the technique isn't already covered, writes a skeleton Sigma rule into `./rules/` as `suggested_<technique_id>_<slugified_name>.yml`. Fails (returns `error`, leaves everything else in the response intact) if that file already exists — it never overwrites. |
+
+### Success response — already covered
+
+```json
+{
+  "technique_id": "T1003.001",
+  "name": "LSASS Memory",
+  "coverage": "covered",
+  "existing_rules": [ /* ... matching rule summaries, same shape as detection://rules ... */ ],
+  "message": "Already covered by ./rules/ — no suggestion needed."
+}
+```
+
+### Success response — gap or partial, with a suggestion
+
+```json
+{
+  "technique_id": "T1552.006",
+  "name": "Group Policy Preferences",
+  "coverage": "gap",
+  "related_rules": [ /* rules covering a parent/sibling technique, if any */ ],
+  "suggestion": {
+    "mitre_analytics": [
+      {
+        "name": "Analytic 1075",
+        "description": "Correlates file enumeration of XML files in the SYSVOL share with suspicious process execution that decodes or reads encrypted credentials embedded in Group Policy Preference files...",
+        "log_sources": [
+          {"name": "WinEventLog:Sysmon", "channel": "EventCode=11"},
+          {"name": "WinEventLog:Security", "channel": "EventCode=5145"}
+        ]
+      }
+    ],
+    "notes": "MITRE-published analytics above are a starting point for a Sigma rule's detection: block."
+  },
+  "template_created": false,
+  "template_path": null
+}
+```
+
+With `create_template=true`, `template_created` is `true` and `template_path` holds the new file's path relative to the project root (e.g. `"rules\\suggested_t1552_006_group_policy_preferences.yml"`). The generated file has `status: experimental`, an empty `selection: {}` in its `detection:` block, and inline `TODO` comments — it's a scaffold, not a working rule.
+
+**Important caveat:** coverage everywhere in this project (`detection://`, `analyze_coverage`, `suggest_rule` itself) is purely tag-derived — it has no concept of whether a rule's detection logic actually does anything. The moment a template is written, it carries the technique's tag, so a *second* call for the same technique will report `coverage: "covered"` and return the empty template as an "existing rule" — even though `selection: {}` matches nothing. Treat generated templates as placeholders that need real detection logic before they should count as real coverage.
+
+### Error response
+
+| Situation | Example error |
+| --- | --- |
+| Unknown technique ID | `Unknown ATT&CK technique: T9999` |
+| ATT&CK data not downloaded | `ATT&CK data not found at <path>. Run scripts/download_attack_data.py first.` |
+| Template file already exists | `Template already exists: suggested_t1552_006_group_policy_preferences.yml` (the rest of the response — coverage, suggestion, related_rules — is still returned) |
+
 ## Testing
 
 ```
 python tests/test_scan_evtx.py
 ```
 
-A manual script (not a pytest suite) that exercises the original two tools: `scan_evtx` against the sample downloaded by `download_sample_evtx.py` (default/full `output_format`, `min_severity`, `rule_filter`, `max_results`, and error cases), and `get_hayabusa_rules` against the local rule set (default cap, `keyword` filtering, and error cases). It does not cover the `detection://` resources or `analyze_coverage` — those were verified manually via `mcp.read_resource()` / direct calls to `analyze_coverage()`.
+A manual script (not a pytest suite) that exercises the original two tools: `scan_evtx` against the sample downloaded by `download_sample_evtx.py` (default/full `output_format`, `min_severity`, `rule_filter`, `max_results`, and error cases), and `get_hayabusa_rules` against the local rule set (default cap, `keyword` filtering, and error cases). It does not cover the `detection://` resources, `analyze_coverage`, or `suggest_rule` — those were verified manually via `mcp.read_resource()` / direct calls.
 
 ## Notes
 

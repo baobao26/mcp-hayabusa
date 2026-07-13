@@ -33,6 +33,7 @@ A detection-engineering knowledge base layer, alongside the original Hayabusa-sc
   - `detection://attack/techniques/{technique_id}` — ATT&CK technique name/description plus coverage assessment (`covered`/`partial`/`gap`) against `rules/`
 - **`analyze_coverage` tool in `server.py`** — same coverage assessment as the ATT&CK resource above, but invocable as a tool rather than browsed, and accepts either a single technique ID (`"T1003.001"`) or a tactic name (`"Credential Access"` / `"credential-access"`), in which case it reports covered/partial/gap counts across every technique in that tactic. Reuses `_load_attack_techniques`/`_assess_technique_coverage`; adds `_load_attack_tactics` (same STIX-bundle-cached pattern) and `_normalize_tactic_name`.
 - **7 new `sigmahq_` rules closing Credential Access gaps** — AS-REP Roasting (T1558.004), Impacket SecretDump (T1003.002/.003/.004 in one rule), a second NTDS.DIT-exfil rule (T1003.003), findstr password recon (T1552.001), Chromium profile-data access (T1555.003, plus a bonus T1539 tag), and two PowerShell-keylogger rules (T1056.001). Fetched fresh from the real SigmaHQ GitHub repo (not the local Hayabusa checkout, which turned out to be a transformed copy — see HANDOFF.md's "Closing analyze_coverage gaps" section for why that mattered). Moved Credential Access from 8/67 to 16/67 covered. T1558.001/.002 (Golden/Silver Ticket) were dropped from scope — no dedicated upstream rule exists for either.
+- **`suggest_rule` tool in `server.py`** — given a technique ID, checks coverage the same way `analyze_coverage` does; if covered, returns the existing rules and stops. Otherwise surfaces MITRE's own suggested detection approach via a new `_load_attack_detection_analytics()` cache (walks the STIX bundle's `detects` relationships from `x-mitre-detection-strategy` to `attack-pattern`, and each strategy's `x-mitre-analytic` objects — real MITRE-authored detection descriptions + log-source hints, not derived from `./rules/`), plus any rules covering a parent/sibling technique. With `create_template=True`, scaffolds a skeleton rule into `./rules/` (never overwrites). Caveat: coverage is purely tag-derived, so a freshly-written empty-`selection` template immediately counts as `"covered"` everywhere in the project — see HANDOFF.md.
 
 Full design rationale for both layers is in CLAUDE.md's Architecture section.
 
@@ -40,7 +41,7 @@ Full design rationale for both layers is in CLAUDE.md's Architecture section.
 
 | File | Purpose |
 | --- | --- |
-| `server.py` | The MCP server (`FastMCP`): `scan_evtx`/`get_hayabusa_rules`/`analyze_coverage` tools, plus four `detection://` resources |
+| `server.py` | The MCP server (`FastMCP`): `scan_evtx`/`get_hayabusa_rules`/`analyze_coverage`/`suggest_rule` tools, plus four `detection://` resources |
 | `requirements.txt` | Python dependency: `mcp` |
 | `scripts/download_hayabusa.py` | Downloads the latest Hayabusa release for this OS/arch into `./hayabusa/` |
 | `scripts/download_sample_evtx.py` | Downloads a sample attack EVTX into `./samples/` |
@@ -48,8 +49,8 @@ Full design rationale for both layers is in CLAUDE.md's Architecture section.
 | `rules/` | 31 curated Sigma detection rules (YAML), checked into git |
 | `tests/test_scan_evtx.py` | Manual script calling `scan_evtx` and `get_hayabusa_rules` directly against the sample/rule set |
 | `CLAUDE.md` | Project spec / guidance for Claude Code |
-| `README.md` | Setup, usage, and tool/response reference — covers `scan_evtx`, `get_hayabusa_rules`, the four `detection://` resources, and `analyze_coverage` |
-| `HANDOFF.md` | What was built, how to use it, what's left, and why key decisions were made — covers both the original Hayabusa-scanning layer and the detection-engineering knowledge base layer (including `analyze_coverage`) |
+| `README.md` | Setup, usage, and tool/response reference — covers `scan_evtx`, `get_hayabusa_rules`, the four `detection://` resources, `analyze_coverage`, and `suggest_rule` |
+| `HANDOFF.md` | What was built, how to use it, what's left, and why key decisions were made — covers both the original Hayabusa-scanning layer and the detection-engineering knowledge base layer (including `analyze_coverage`/`suggest_rule`) |
 | `.gitignore` | Excludes `hayabusa/`, `*.zip`, `samples/*.evtx`, `attack/`, `.mcp.json`, Python build artifacts |
 | `.mcp.json` | Registers this server with Claude Code locally (`python server.py`, machine-specific `cwd`) — gitignored. Not `.claude/settings.local.json`, which Claude Code doesn't read `mcpServers` from. |
 | `hayabusa/` | Extracted Hayabusa binary + `rules/`/`config/` — gitignored, fetched on demand |
@@ -70,4 +71,5 @@ Also registered outside this repo, in Claude Desktop's own config (see README.md
 See `HANDOFF.md` → "What's left to do" for the original Hayabusa-scanning layer's open items (no automated test framework, no multi-file/directory scan support, no rule/config customization exposed, no `update-rules` integration). For the detection-engineering knowledge base layer:
 
 - `mappings/` (explicit, hand-curated ATT&CK technique-to-rule mapping files) — planned, not started; current technique lookups are all derived on the fly from rule tags.
-- `tests/test_scan_evtx.py` only covers the original two tools — no automated check for the `detection://` resources or `analyze_coverage` (all verified manually in-session).
+- `tests/test_scan_evtx.py` only covers the original two tools — no automated check for the `detection://` resources, `analyze_coverage`, or `suggest_rule` (all verified manually in-session).
+- `suggest_rule`'s coverage check has no concept of detection-logic quality — a freshly generated `create_template=True` scaffold (`selection: {}`) counts as full coverage immediately, same as a real rule. See HANDOFF.md's "suggest_rule: decisions made and why" for why this wasn't special-cased.
