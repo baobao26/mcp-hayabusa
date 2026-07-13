@@ -7,7 +7,7 @@ An MCP server with two layers: it wraps the [Hayabusa](https://github.com/Yamato
 - Python 3.10+ (uses the `X | None` type-hint syntax)
 - The `mcp` library (`pip install -r requirements.txt`)
 - The Hayabusa CLI, extracted to `./hayabusa/` (see Setup below)
-- The MITRE ATT&CK Enterprise STIX bundle, extracted to `./attack/` (see Setup below) — only required for the `detection://attack/techniques/{technique_id}` resource
+- The MITRE ATT&CK Enterprise STIX bundle, extracted to `./attack/` (see Setup below) — only required for the `detection://attack/techniques/{technique_id}` resource and the `analyze_coverage` tool
 
 ## Setup
 
@@ -26,7 +26,7 @@ python scripts/download_sample_evtx.py
 
 Downloads one real attack-technique sample (`4794_DSRM_password_change_t1098.evtx`) from [EVTX-ATTACK-SAMPLES](https://github.com/sbousseaden/EVTX-ATTACK-SAMPLES) into `./samples/` (also gitignored).
 
-Required for the `detection://attack/techniques/{technique_id}` resource:
+Required for the `detection://attack/techniques/{technique_id}` resource and the `analyze_coverage` tool:
 
 ```
 python scripts/download_attack_data.py

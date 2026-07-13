@@ -49,7 +49,7 @@ Verified manually against:
 - **`rule_filter` is a client-side substring match on `RuleTitle`, not a real Hayabusa rule selector.** Hayabusa's own rule-selection flags (`-r`, `-c`, `--include-tag`, `--include-category`, etc.) still aren't surfaced — `rule_filter` only filters findings *after* Hayabusa has already run every rule, it doesn't change which rules execute. For a large EVTX file this means no scan-time speedup, just a smaller result set.
 - **No `update-rules` integration.** Hayabusa ships with a `update-rules` subcommand to pull the latest detection rules; nothing currently calls it, so rules are whatever `download_hayabusa.py`'s release zip bundled. `get_hayabusa_rules` reflects whatever's on disk, so it's only as current as the last `download_hayabusa.py` run.
 - **`get_hayabusa_rules`'s YAML field extraction is a regex line-scan, not a real parser.** Works for the current rule set's consistent unindented-top-level-field style (see the fixed bug under Decisions), but a rule that nests a scalar field unusually (e.g. inside a `related:`/`references:` sub-mapping using an unindented continuation) could still parse incorrectly. Low risk since it's a discovery/listing aid, not used for actual scanning.
-- ~~Git repo has no commits yet.~~ Resolved: 6 commits on `master`, all pushed to `origin` (see `STATE.md` for the current commit list).
+- ~~Git repo has no commits yet.~~ Resolved: 8 commits on `master`, all pushed to `origin` (see `STATE.md` for the current commit list).
 - **No shared MCP registration.** `.mcp.json` is gitignored (absolute-path `cwd`, machine-specific). If the team wants this server auto-registered for every collaborator, a portable (non-absolute-path) shared `.mcp.json` would need to be worked out; right now each collaborator creates their own.
 
 ## Decisions made and why
@@ -90,8 +90,8 @@ A second layer built on the same server: a curated Sigma rule set and MITRE ATT&
 ### How to use it
 
 ```
-python scripts/download_attack_data.py     # downloads ./attack/enterprise-attack.json (only needed for the ATT&CK resource)
-python server.py                           # same server process exposes both tools and the four detection:// resources
+python scripts/download_attack_data.py     # downloads ./attack/enterprise-attack.json (needed for the ATT&CK resource and analyze_coverage)
+python server.py                           # same server process exposes all three tools and the four detection:// resources
 ```
 
 Verified manually via `mcp.read_resource()`/`mcp.list_resource_templates()` (no automated test coverage yet — see What's left to do):
