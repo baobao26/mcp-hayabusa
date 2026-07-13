@@ -1,0 +1,87 @@
+# Reference example for the detection-engineering skill.
+#
+# This file demonstrates all five of this project's rule-quality standards
+# (see ../../SKILL.md) done correctly in one place. It lives under the skill's
+# references/, not under the project's ./rules/ — it is NOT picked up by
+# SIGMA_RULES_DIR, the detection:// resources, analyze_coverage, or
+# validate-rule.py's target set. Copy its structure and conventions when
+# authoring a real rule; don't copy this file itself into ./rules/ verbatim.
+
+title: Suspicious Process Access to LSASS Memory
+id: fe41d923-d63b-45bb-8c85-bbfb6886b6b3
+status: test
+description: |
+    Detects non-standard processes requesting access to lsass.exe with access
+    rights commonly used by credential dumping tools (e.g. Mimikatz, ProcDump,
+    Task Manager abuse) to read process memory and extract credential material.
+references:
+    - https://attack.mitre.org/techniques/T1003/001/
+    - https://github.com/SigmaHQ/sigma/blob/master/rules/windows/process_access/proc_access_win_lsass_access.yml
+author: Detection Engineering KB
+date: 2026-07-12
+# Standard 1: ATT&CK technique mapping. At least one attack.t####[.###] tag,
+# preferring the most specific sub-technique. attack.s0002 (a software ID, for
+# Mimikatz) is extra context and fine to include alongside the technique tag,
+# but it does not substitute for one.
+tags:
+    - attack.credential-access
+    - attack.t1003.001
+    - attack.s0002
+logsource:
+    category: process_access
+    product: windows
+detection:
+    selection_target:
+        TargetImage|endswith: '\lsass.exe'
+    selection_access:
+        GrantedAccess:
+            - '0x1010'
+            - '0x1410'
+            - '0x1438'
+            - '0x143a'
+            - '0x1fffff'
+    filter_main_known_tools:
+        SourceImage|endswith:
+            - '\MsMpEng.exe'
+            - '\WmiPrvSE.exe'
+            - '\wmiprvse.exe'
+            - '\werfault.exe'
+            - '\dllhost.exe'
+    condition: selection_target and selection_access and not filter_main_known_tools
+# Standard 3: false positive conditions. Concrete, named sources of legitimate
+# matches - not a bare "Unknown". A filter_* selection above already excludes
+# the most common ones; falsepositives: documents what's left over even after
+# that filter (broader categories too numerous/variable to enumerate as an
+# exact-match filter).
+falsepositives:
+    - Endpoint protection or EDR agents performing legitimate memory scans
+    - Backup or monitoring agents with broad process-access privileges
+# Standard 2: severity with justification. The comment states *why this level
+# and not one notch up/down* - tied to signal strength and expected legitimate
+# trigger rate, not just a restatement of the rule's description.
+#
+# high: the specific GrantedAccess masks selected are strongly associated with
+# memory-reading tools rather than routine process interaction, and the
+# known-tool filter already removes the highest-volume legitimate callers -
+# but arbitrary EDR/backup agents not in that filter (see falsepositives)
+# keep this shy of critical without environment-specific tuning.
+level: high
+
+# Standard 4: at least one test case, as a comment block, with enough field
+# context that a reader can verify the match by inspection. Includes a
+# near-miss because the rule uses a filter list that could be incomplete or
+# miskeyed - showing a filtered-out true positive-shaped event demonstrates
+# the filter is doing its job, not silently disabling the rule.
+#
+# Test case: matches an event with
+#   TargetImage: C:\Windows\System32\lsass.exe
+#   GrantedAccess: 0x1438
+#   SourceImage: C:\Users\Public\procdump64.exe
+# Should NOT match: same TargetImage/GrantedAccess but
+#   SourceImage: C:\Windows\System32\wbem\WmiPrvSE.exe
+#   (a known-tool false positive the filter_main_known_tools selection
+#   excludes - confirms the filter is load-bearing, not dead weight)
+
+# Standard 5: naming convention. This file is lsass_memory_access.yml -
+# lowercase, underscores, no spaces or hyphens. (title: above is free text and
+# does not need to follow this rule - only the filename does.)

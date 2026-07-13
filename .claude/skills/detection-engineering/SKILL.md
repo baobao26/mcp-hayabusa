@@ -122,3 +122,10 @@ standard (most commonly #3 or #4, since Sigma tooling doesn't enforce either).
    checks above still apply before the rule is actually done.
 3. Follow the existing `./rules/*.yml` files as structural examples (front matter
    order, `logsource:`, `detection:` block shape) rather than inventing a new shape.
+
+## References
+
+When writing rules, consult:
+- `references/example-rules/` - Well-formatted examples to follow
+- `references/severity-guide.md` - Severity level guidance
+- `references/false-positive-patterns.md` - Common FP documentation
