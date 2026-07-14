@@ -34,9 +34,11 @@ rule MAL_Win_CobaltStrike_Beacon_ConfigXOR_Jul26 {
     // [len=00 02], XOR'd with the build's fixed single-byte key. Header
     // layout confirmed against CobaltStrikeParser's binary_repr() struct;
     // keys (0x69 = Beacon v3, 0x2e = Beacon v4 pre-4.8) confirmed via
-    // SentinelOne's published analysis - not guessed.
-    $hdr_69 = { 69 68 69 68 69 6B }
-    $hdr_2e = { 2E 2F 2E 2F 2E 2C }
+    // SentinelOne's published analysis - not guessed. Written as ASCII text
+    // literals rather than hex bytes per `yr check`'s text_as_hex lint,
+    // since the XOR'd header happens to land on printable characters.
+    $hdr_69 = "ihihik" ascii
+    $hdr_2e = "././.," ascii
 
     // Distinctive internal Beacon format strings, brute-forced across every
     // single-byte XOR key - catches a config encoded with a key other than
@@ -74,13 +76,13 @@ rule MAL_Win_CobaltStrike_Beacon_ConfigXOR_Jul26 {
 //   random 6 bytes - it lowers the bar for a coincidental match in large
 //   scans versus a higher-entropy string. The $str_* path with its 2-of
 //   requirement is the higher-confidence signal if both fire independently.
-// - Neither rule in this file has been validated against a goodware corpus
-//   or real Cobalt Strike samples in this environment (no `yr` CLI or
-//   sample set available here) - per this skill's standard workflow, run
-//   `yr check`, `yr fmt -w`, and a goodware scan (VirusTotal corpus or local
-//   clean-file set) before treating either as production-ready, and confirm
-//   against current in-the-wild beacon samples, since Cobalt Strike's
-//   internals change across releases.
+// - Both rules pass `yr check` (no errors/warnings) and `yr fmt --check`
+//   (correctly formatted). Neither has been validated against a goodware
+//   corpus or real Cobalt Strike samples (no sample set available in this
+//   environment) - per this skill's standard workflow, run a goodware scan
+//   (VirusTotal corpus or local clean-file set) before treating either as
+//   production-ready, and confirm against current in-the-wild beacon
+//   samples, since Cobalt Strike's internals change across releases.
 // - The two rules target independent artifacts (pipes vs. config block);
 //   a non-match on one says nothing about the other. Neither is a
 //   substitute for the still-missing coverage of CS 4.8+'s multi-byte XOR
