@@ -191,11 +191,11 @@ Alongside the two tools above, the server exposes a curated Sigma rule set (`./r
 
 ### `detection://rules`
 
-Lists all rules in `./rules/` (currently 31: hand-authored plus a curated selection copied from upstream [SigmaHQ/sigma](https://github.com/SigmaHQ/sigma), covering credential-access, lateral-movement, and persistence techniques).
+Lists all rules in `./rules/` (currently 33: hand-authored plus a curated selection copied from upstream [SigmaHQ/sigma](https://github.com/SigmaHQ/sigma), covering credential-access, lateral-movement, persistence, and (via one Azure AD rule) cloud identity techniques).
 
 ```json
 {
-  "count": 31,
+  "count": 33,
   "rules": [
     {
       "rule_name": "lsass_process_access",
